@@ -2,7 +2,7 @@
 // @name           Shortcut Priority
 // @description    Arc-style per-shortcut conflict setting: Prefer Websites, Use Both, or Prefer Zen.
 // @include        main
-// @version        0.2.0
+// @version        0.3.0
 // ==/UserScript==
 
 (() => {
@@ -29,6 +29,7 @@
   // Remembers each key's own `reserved` attribute so we can put it back.
   const ORIG_ATTR = "zsp-orig-reserved";
   const NO_ATTR = "\u0000none";
+  const NATIVE_PRIORITY_ATTR = "data-native-shortcut-priority";
 
   const MSG = "ZenShortcutPriority:";
   const isMac = AppConstants.platform == "macosx";
@@ -122,6 +123,16 @@
   function applyToKey(keyEl, rules, keysets) {
     if (!keyEl.id || keyEl.getAttribute("internal") == "true") {
       return;
+    }
+    // The native Zen backport reads this opt-in before macOS window cycling.
+    // Keep it limited to our switcher actions; stock Zen ignores the attribute.
+    if (keyEl.parentElement === switcherKeyset) {
+      if (isMac && getBool(PREF_ENABLED, true) &&
+          effectiveMode(keyEl, rules) == ZEN) {
+        keyEl.setAttribute(NATIVE_PRIORITY_ATTR, "true");
+      } else {
+        keyEl.removeAttribute(NATIVE_PRIORITY_ATTR);
+      }
     }
     const wanted = wantedReserved(keyEl, rules);
     const current = keyEl.getAttribute("reserved");
@@ -371,6 +382,7 @@
   let switcherKeyset;
   let switcherCommands;
   let switcherMenus = [];
+  let switcherPopup;
   let cyclingModifiers = null;
   // Cocoa caches menu equivalents; refresh the reference after a remap.
   const switcherKeyObserver = new MutationObserver(() => {
@@ -401,9 +413,10 @@
     } else {
       ctrlTab.open();
       if (!forward) {
-        // open() starts at index 1. Walk back past the current tab.
-        advanceTab(false);
-        advanceTab(false);
+        // Preserve open()'s delay so a quick release commits before popup focus
+        // changes. advanceFocus() would force the panel open immediately.
+        ctrlTab._selectedIndex = ctrlTab.tabPreviewCount - 1;
+        gBrowser.warmupTab(ctrlTab.selected._tab);
       }
     }
     if (!cyclingModifiers.meta && !cyclingModifiers.ctrl &&
@@ -427,11 +440,18 @@
     }
   }
 
+  function refreshNativeSwitcherMenu() {
+    if (isMac) {
+      // Rebuild the cache without opening a menu or firing popup handlers.
+      window.windowUtils?.forceUpdateNativeMenuAt?.("");
+    }
+  }
+
   function installTabSwitcher() {
     switcherCommands = document.createXULElement("commandset");
     switcherKeyset = document.createXULElement("keyset");
-    const windowMenu = document.getElementById("windowPopup") ||
-      document.getElementById("menu_viewPopup");
+    // Gecko warns against dynamically changing macOS's managed Window menu.
+    switcherPopup = document.getElementById("menu_viewPopup");
     for (const direction of ["forward", "backward"]) {
       const id = "zsp_tabSwitcher_" + direction;
       const command = document.createXULElement("command");
@@ -450,9 +470,10 @@
       const item = document.createXULElement("menuitem");
       item.id = "menu_zsp_tabSwitcher_" + direction;
       item.setAttribute("label", "Tab Switcher (" + direction + ")");
+      item.setAttribute("accesskey", direction == "forward" ? "w" : "b");
       item.setAttribute("key", "key_zsp_tabSwitcher_" + direction);
       item.setAttribute("command", "cmd_zsp_tabSwitcher_" + direction);
-      windowMenu.append(item);
+      switcherPopup.append(item);
       switcherMenus.push(item);
     }
     switcherKeyObserver.observe(switcherKeyset, {
@@ -461,19 +482,26 @@
     window.addEventListener("keyup", onSwitcherKeyUp, {
       capture: true, mozSystemGroup: true,
     });
+    // Cocoa otherwise leaves dynamically inserted rows lazy until menu opening.
+    refreshNativeSwitcherMenu();
   }
 
-  function removeTabSwitcher() {
+  function removeTabSwitcher(refreshNative = true) {
     switcherKeyObserver.disconnect();
     if (cyclingModifiers && ctrlTab.isOpen) ctrlTab.close();
     cyclingModifiers = null;
     window.removeEventListener("keyup", onSwitcherKeyUp, {
       capture: true, mozSystemGroup: true,
     });
+    for (const key of switcherKeyset?.children || []) {
+      key.removeAttribute(NATIVE_PRIORITY_ATTR);
+    }
     for (const item of switcherMenus) item.remove();
     switcherMenus = [];
     switcherKeyset?.remove();
     switcherCommands?.remove();
+    if (refreshNative) refreshNativeSwitcherMenu();
+    switcherPopup = null;
   }
 
   // ---------------------------------------------------------------------------
@@ -814,7 +842,7 @@
     }
   }
 
-  function uninit() {
+  function uninit(event) {
     if (disposed) return;
     disposed = true;
     window.removeEventListener("unload", uninit);
@@ -826,7 +854,7 @@
       delete window.ZenShortcutPriority;
       return;
     }
-    removeTabSwitcher();
+    removeTabSwitcher(event?.type !== "unload");
     keysetObserver.disconnect();
     window.removeEventListener("keydown", onKeyDown, {
       capture: true,

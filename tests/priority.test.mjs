@@ -96,6 +96,9 @@ function harness({ keys = [], prefs = {}, delayedStartupFinished = true, platfor
   document.body.append(keyset);
   for (const key of keys) keyset.append(new Element('key', key));
   const menubar = new Element('menubar', { id: 'main-menubar' });
+  const view = new Element('menu', { id: 'view-menu' });
+  view.append(new Element('menupopup', { id: 'menu_viewPopup' }));
+  menubar.append(view);
   const menu = new Element('menu', { id: 'windowMenu' });
   menu.append(new Element('menupopup', { id: 'windowPopup' }));
   menubar.append(menu);
@@ -110,6 +113,8 @@ function harness({ keys = [], prefs = {}, delayedStartupFinished = true, platfor
     document,
     location: { href: 'chrome://browser/content/browser.xhtml' },
   });
+  const nativeReloads = [];
+  window.windowUtils = { forceUpdateNativeMenuAt: index => nativeReloads.push(index) };
   const services = {
     prefs: {
       getBoolPref: (key, fallback) => values.get(key) ?? fallback,
@@ -139,6 +144,7 @@ function harness({ keys = [], prefs = {}, delayedStartupFinished = true, platfor
   const browser = { localName: 'browser', isRemoteBrowser: true };
   const gBrowser = {
     browsers: [],
+    warmupTab() {},
     addTabsProgressListener: listener => progressListeners.add(listener),
     removeTabsProgressListener: listener => progressListeners.delete(listener),
   };
@@ -150,6 +156,9 @@ function harness({ keys = [], prefs = {}, delayedStartupFinished = true, platfor
     opens: 0, closes: 0, picks: [],
     get isOpen() { return this.pending || this.panelOpen; },
     get selected() { return previews[this.index]; },
+    get tabPreviewCount() { return tabCount; },
+    get _selectedIndex() { return this.index; },
+    set _selectedIndex(index) { this.index = index; },
     init() {},
     open() { this.opens++; this.pending = true; this.index = 1; },
     showPanel() { this.pending = false; this.panelOpen = true; },
@@ -193,7 +202,7 @@ function harness({ keys = [], prefs = {}, delayedStartupFinished = true, platfor
     return event;
   }
   return {
-    api, window, document, keyset, browser, values, prefObservers, progressListeners, mutations, ctrlTab, attachments,
+    api, window, document, keyset, browser, values, prefObservers, progressListeners, mutations, ctrlTab, attachments, nativeReloads,
     setPref, keypress,
     bind(direction, modifiers = 'accel', key = direction === 'forward' ? '`' : '1') {
       const element = document.getElementById('key_zsp_tabSwitcher_' + direction);
@@ -398,13 +407,16 @@ test('backward starts at the last tab and cycling skips Show All Tabs in either 
 });
 
 test('a quick modifier release picks before popup display, with one and two tab cases', () => {
-  const quick = harness();
-  quick.bind('forward');
-  quick.api.cycleTabs(true);
-  assert.equal(quick.ctrlTab.pending, true);
-  quick.release();
-  assert.deepEqual(quick.ctrlTab.picks.map(tab => tab.index), [1]);
-  assert.equal(quick.ctrlTab.panelOpen, false);
+  for (const forward of [true, false]) {
+    const quick = harness();
+    quick.bind(forward ? 'forward' : 'backward');
+    quick.api.cycleTabs(forward);
+    assert.equal(quick.ctrlTab.pending, true, 'initial traversal preserves the native popup delay');
+    assert.equal(quick.ctrlTab.panelOpen, false);
+    quick.release();
+    assert.deepEqual(quick.ctrlTab.picks.map(tab => tab.index), [forward ? 1 : 3]);
+    assert.equal(quick.ctrlTab.panelOpen, false);
+  }
   const single = harness({ tabCount: 1 });
   single.bind('forward');
   single.api.cycleTabs(true);
@@ -474,4 +486,57 @@ test('switcher participates in per-shortcut priority and Use Both dispatches its
   assert.deepEqual(h.ctrlTab.picks.map(tab => tab.index), [2]);
   h.api.setRules({ [forward.id]: 'zen' });
   assert.equal(forward.getAttribute('reserved'), 'true');
+});
+
+test('native priority follows the macOS switcher mode and stops when disabled', () => {
+  const attr = 'data-native-shortcut-priority';
+  const h = harness({ keys: [{ id: 'other', reserved: 'true' }] });
+  const forward = h.bind('forward');
+  const backward = h.bind('backward');
+  assert.equal(forward.getAttribute(attr), 'true');
+  assert.equal(backward.getAttribute(attr), 'true');
+  assert.equal(h.key('other').getAttribute(attr), null);
+  for (const mode of ['websites', 'both']) {
+    h.api.setRules({ [forward.id]: mode });
+    assert.equal(forward.getAttribute(attr), null);
+    assert.equal(backward.getAttribute(attr), 'true');
+  }
+  h.api.setRules({ [forward.id]: 'zen' });
+  assert.equal(forward.getAttribute(attr), 'true');
+  h.setPref(branch + 'enabled', false);
+  assert.equal(forward.getAttribute(attr), null);
+  assert.equal(backward.getAttribute(attr), null);
+  h.setPref(branch + 'enabled', true);
+  assert.equal(forward.getAttribute(attr), 'true');
+  assert.equal(backward.getAttribute(attr), 'true');
+});
+
+test('native priority stays absent on other platforms and honors the global mode', () => {
+  const attr = 'data-native-shortcut-priority';
+  const linux = harness({ platform: 'linux' });
+  assert.equal(linux.bind('forward').getAttribute(attr), null);
+  const h = harness({ prefs: { [branch + 'default']: 'websites' } });
+  const forward = h.bind('forward');
+  assert.equal(forward.getAttribute(attr), null);
+  h.api.setRules({ [forward.id]: 'zen' });
+  assert.equal(forward.getAttribute(attr), 'true');
+  h.api.setRules({});
+  assert.equal(forward.getAttribute(attr), null);
+});
+
+test('native View menu refreshes on install and mod unload, with priority withdrawn before removal', () => {
+  const h = harness();
+  const key = h.bind('forward');
+  assert.equal(h.key('menu_zsp_tabSwitcher_forward').parentElement.id, 'menu_viewPopup');
+  assert.equal(h.key('windowPopup').children.length, 0);
+  assert.deepEqual(h.nativeReloads, ['']);
+  h.api.uninit();
+  assert.equal(key.getAttribute('data-native-shortcut-priority'), null);
+  assert.deepEqual(h.nativeReloads, ['', '']);
+  const closing = harness();
+  closing.window.dispatch('unload', { type: 'unload' });
+  assert.deepEqual(closing.nativeReloads, [''], 'closing a window avoids rebuilding its native menu');
+  const linux = harness({ platform: 'linux' });
+  linux.api.uninit();
+  assert.deepEqual(linux.nativeReloads, []);
 });
