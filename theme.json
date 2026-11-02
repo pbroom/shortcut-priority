@@ -1,0 +1,16 @@
+{
+  "id": "shortcut-priority",
+  "name": "Shortcut Priority",
+  "description": "Arc-style shortcut priority: pick Prefer Websites, Use Both, or Prefer Zen for each keyboard shortcut, right in Zen's Keyboard Shortcuts settings.",
+  "author": "pbroom",
+  "version": "0.1.0",
+  "homepage": "https://github.com/pbroom/shortcut-priority",
+  "tags": ["keyboard", "shortcuts", "arc"],
+  "scripts": {
+    "shortcut-priority.uc.js": {
+      "include": ["chrome://browser/content/browser.xhtml"]
+    }
+  },
+  "supportsUnload": true,
+  "preferences": "preferences.json"
+}
