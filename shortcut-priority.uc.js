@@ -434,6 +434,8 @@
 \`;
 
   let state = null;
+  // False once the mod is turned off, so later page loads stay untouched.
+  let active = true;
   const sheetsLoaded = new WeakSet();
   let observer = null;
 
@@ -488,9 +490,9 @@
     }
   }
 
-  function setup() {
-    if (!isKeyboardPage()) {
-      return;
+  function attach() {
+    if (!active || !isKeyboardPage()) {
+      return false;
     }
     const doc = content.document;
     if (!sheetsLoaded.has(doc)) {
@@ -506,11 +508,22 @@
     if (table) {
       observer.observe(table, { childList: true, subtree: true });
     }
-    sendAsyncMessage(MSG + "GetState");
+    return true;
+  }
+
+  function setup() {
+    if (attach()) {
+      sendAsyncMessage(MSG + "GetState");
+    }
   }
 
   addMessageListener(MSG + "State", ({ data }) => {
     state = data;
+    if (!active) {
+      // Turned back on: watch the table again.
+      active = true;
+      attach();
+    }
     if (!isKeyboardPage()) {
       return;
     }
@@ -524,6 +537,7 @@
   });
 
   addMessageListener(MSG + "Remove", () => {
+    active = false;
     state = null;
     observer?.disconnect();
     if (content.document) {
@@ -541,7 +555,8 @@
     "data:application/javascript;charset=utf-8," +
     encodeURIComponent(FRAME_SCRIPT);
 
-  const injected = new WeakSet();
+  // Message managers we've loaded the frame script into.
+  const injected = new Set();
 
   function stateFor() {
     const rules = getRules();
@@ -586,6 +601,9 @@
   }
 
   function receiveMessage(message) {
+    if (!getBool(PREF_ENABLED, true)) {
+      return;
+    }
     const browser = message.target;
     if (message.name == MSG + "GetState") {
       sendState(browser);
@@ -692,6 +710,11 @@
     for (const browser of keyboardBrowsers()) {
       browser.messageManager?.sendAsyncMessage(MSG + "Remove");
     }
+    for (const mm of injected) {
+      mm.removeMessageListener(MSG + "GetState", receiveMessage);
+      mm.removeMessageListener(MSG + "SetMode", receiveMessage);
+    }
+    injected.clear();
     restoreAll();
     delete window.ZenShortcutPriority;
   }
