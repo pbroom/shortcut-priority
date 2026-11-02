@@ -22,6 +22,20 @@ Built and tested against Zen 1.24b.
 
 Then open Settings → Keyboard Shortcuts (`about:keyboard`). Turning the mod off puts every shortcut back the way Zen ships it, without a restart.
 
+## Tab switcher
+
+The mod adds **Tab Switcher (forward)** and **Tab Switcher (backward)** to the Window section of `about:keyboard` (View on platforms without a Window menu). Assign the keys there and choose their priority using the same picker as every other shortcut. They start unassigned, so installing the mod does not replace your existing bindings.
+
+For an Arc-style setup on macOS:
+
+1. Clear **Go to Tab 1** if you want to reuse Command+1.
+2. Assign **Tab Switcher (forward)** to Command+backtick and **Tab Switcher (backward)** to Command+1.
+3. Hold Command while pressing either key to cycle through the native recent-tab previews. Release Command to select. Ctrl+Tab continues to work.
+
+macOS normally reserves Command+backtick for **Move focus to next window**. If Zen's recorder does not see it, change that system shortcut first under System Settings → Keyboard → Keyboard Shortcuts → Keyboard. The mod does not change system shortcuts. Other key combinations can be assigned directly in Zen.
+
+The switcher uses Zen's existing preview list and pending-tab rules. It skips the Show All Tabs button while cycling, and creates no separate tab history or preview UI. Disable the Sine mod to remove its actions and menu items; Zen retains your custom bindings for re-enabling it.
+
 ## Options
 
 In the mod's settings in Sine Mods, or under `zen.shortcut-priority.*` in `about:config`.
@@ -39,6 +53,10 @@ Zen 1.24 moved its shortcuts to Firefox's `about:keyboard`, where each shortcut 
 - **Prefer Zen** sets `reserved="true"`. **Prefer Websites** sets `reserved="false"`. Gecko only reads key elements when their keyset is attached, so the script re-attaches changed keysets, the same way Firefox applies edited shortcuts.
 - **Use Both** keeps the key unreserved so the page gets it, runs Zen's command itself as soon as the key is pressed, and cancels the copy of the event the page process sends back so the command doesn't run twice.
 - The picker is added to `about:keyboard` by a small frame script, because that page runs in Firefox's privileged about: process rather than the browser window.
+
+## Verification
+
+Run `npm test` (Node 22 or later). The tests exercise priority rules, event forwarding, native switcher actions, modifier release, and unload cleanup with a browser harness. They do not prove macOS shortcut delivery; verify configured keys in a running Zen as well.
 
 ## License
 

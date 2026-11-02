@@ -2,7 +2,7 @@
 // @name           Shortcut Priority
 // @description    Arc-style per-shortcut conflict setting: Prefer Websites, Use Both, or Prefer Zen.
 // @include        main
-// @version        0.1.0
+// @version        0.2.0
 // ==/UserScript==
 
 (() => {
@@ -364,6 +364,119 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Native tab-switcher actions. Menu entries let Firefox list these in
+  // about:keyboard, where bindings and the priority picker remain editable.
+  // ---------------------------------------------------------------------------
+
+  let switcherKeyset;
+  let switcherCommands;
+  let switcherMenus = [];
+  let cyclingModifiers = null;
+  // Cocoa caches menu equivalents; refresh the reference after a remap.
+  const switcherKeyObserver = new MutationObserver(() => {
+    for (const item of switcherMenus) {
+      const id = item.getAttribute("key");
+      item.removeAttribute("key");
+      item.setAttribute("key", id);
+    }
+  });
+
+  function advanceTab(forward) {
+    ctrlTab.advanceFocus(forward);
+    if (ctrlTab.selected === ctrlTab.showAllButton) {
+      ctrlTab.advanceFocus(forward);
+    }
+  }
+
+  function cycleTabs(forward) {
+    const key = document.getElementById(
+      "key_zsp_tabSwitcher_" + (forward ? "forward" : "backward")
+    );
+    if (!key) return;
+    ctrlTab.init();
+    if (ctrlTab.tabCount < 2) return;
+    cyclingModifiers = parseModifiers(key);
+    if (ctrlTab.isOpen) {
+      advanceTab(forward);
+    } else {
+      ctrlTab.open();
+      if (!forward) {
+        // open() starts at index 1. Walk back past the current tab.
+        advanceTab(false);
+        advanceTab(false);
+      }
+    }
+    if (!cyclingModifiers.meta && !cyclingModifiers.ctrl &&
+        !cyclingModifiers.alt && !cyclingModifiers.shift) {
+      cyclingModifiers = null;
+      ctrlTab.pick();
+    }
+  }
+
+  function onSwitcherKeyUp(event) {
+    const mods = cyclingModifiers;
+    if (!event.isTrusted || !mods) return;
+    if ((mods.meta && !event.metaKey) || (mods.ctrl && !event.ctrlKey) ||
+        (mods.alt && !event.altKey) || (mods.shift && !event.shiftKey)) {
+      cyclingModifiers = null;
+      if (ctrlTab.isOpen) {
+        event.preventDefault();
+        event.stopPropagation();
+        ctrlTab.pick();
+      }
+    }
+  }
+
+  function installTabSwitcher() {
+    switcherCommands = document.createXULElement("commandset");
+    switcherKeyset = document.createXULElement("keyset");
+    const windowMenu = document.getElementById("windowPopup") ||
+      document.getElementById("menu_viewPopup");
+    for (const direction of ["forward", "backward"]) {
+      const id = "zsp_tabSwitcher_" + direction;
+      const command = document.createXULElement("command");
+      command.id = "cmd_" + id;
+      command.addEventListener("command", () => cycleTabs(direction === "forward"));
+      switcherCommands.append(command);
+      const key = document.createXULElement("key");
+      key.id = "key_" + id;
+      key.setAttribute("command", command.id);
+      key.setAttribute("reserved", "true");
+      switcherKeyset.append(key);
+    }
+    document.body.append(switcherCommands, switcherKeyset);
+    // Add menu items after their keys exist so Cocoa can resolve equivalents.
+    for (const direction of ["forward", "backward"]) {
+      const item = document.createXULElement("menuitem");
+      item.id = "menu_zsp_tabSwitcher_" + direction;
+      item.setAttribute("label", "Tab Switcher (" + direction + ")");
+      item.setAttribute("key", "key_zsp_tabSwitcher_" + direction);
+      item.setAttribute("command", "cmd_zsp_tabSwitcher_" + direction);
+      windowMenu.append(item);
+      switcherMenus.push(item);
+    }
+    switcherKeyObserver.observe(switcherKeyset, {
+      subtree: true, attributes: true, attributeFilter: ["key", "keycode", "modifiers"],
+    });
+    window.addEventListener("keyup", onSwitcherKeyUp, {
+      capture: true, mozSystemGroup: true,
+    });
+  }
+
+  function removeTabSwitcher() {
+    switcherKeyObserver.disconnect();
+    if (cyclingModifiers && ctrlTab.isOpen) ctrlTab.close();
+    cyclingModifiers = null;
+    window.removeEventListener("keyup", onSwitcherKeyUp, {
+      capture: true, mozSystemGroup: true,
+    });
+    for (const item of switcherMenus) item.remove();
+    switcherMenus = [];
+    switcherKeyset?.remove();
+    switcherCommands?.remove();
+  }
+
+  // ---------------------------------------------------------------------------
   // The picker in about:keyboard.
   //
   // about:keyboard runs in the privileged about: process, so a small frame
@@ -669,7 +782,14 @@
     refreshKeysets(keysets);
   }
 
+  let initialized = false;
+  let disposed = false;
+  let startupObserver = null;
+
   function init() {
+    if (disposed) return;
+    initialized = true;
+    installTabSwitcher();
     applyAll();
     refreshBothKeys();
     for (const node of [document, document.body]) {
@@ -695,6 +815,18 @@
   }
 
   function uninit() {
+    if (disposed) return;
+    disposed = true;
+    window.removeEventListener("unload", uninit);
+    if (startupObserver) {
+      Services.obs.removeObserver(startupObserver, "browser-delayed-startup-finished");
+      startupObserver = null;
+    }
+    if (!initialized) {
+      delete window.ZenShortcutPriority;
+      return;
+    }
+    removeTabSwitcher();
     keysetObserver.disconnect();
     window.removeEventListener("keydown", onKeyDown, {
       capture: true,
@@ -721,6 +853,7 @@
 
   window.ZenShortcutPriority = {
     applyAll,
+    cycleTabs,
     uninit,
     getRules,
     setRules,
@@ -733,13 +866,15 @@
   if (gBrowserInit.delayedStartupFinished) {
     init();
   } else {
-    const obs = (subject, topic) => {
+    startupObserver = (subject, topic) => {
       if (subject == window) {
-        Services.obs.removeObserver(obs, topic);
+        Services.obs.removeObserver(startupObserver, topic);
+        startupObserver = null;
         init();
       }
     };
-    Services.obs.addObserver(obs, "browser-delayed-startup-finished");
+    Services.obs.addObserver(startupObserver, "browser-delayed-startup-finished");
   }
   window.addEventListener("unload", uninit, { once: true });
+  if (typeof window.addUnloadListener === "function") window.addUnloadListener(uninit);
 })();
