@@ -2,7 +2,7 @@
 // @name           Shortcut Priority
 // @description    Arc-style per-shortcut conflict setting: Prefer Websites, Use Both, or Prefer Zen.
 // @include        main
-// @version        0.2.0
+// @version        0.3.0
 // ==/UserScript==
 
 (() => {
@@ -29,6 +29,7 @@
   // Remembers each key's own `reserved` attribute so we can put it back.
   const ORIG_ATTR = "zsp-orig-reserved";
   const NO_ATTR = "\u0000none";
+  const NATIVE_PRIORITY_ATTR = "data-native-shortcut-priority";
 
   const MSG = "ZenShortcutPriority:";
   const isMac = AppConstants.platform == "macosx";
@@ -122,6 +123,16 @@
   function applyToKey(keyEl, rules, keysets) {
     if (!keyEl.id || keyEl.getAttribute("internal") == "true") {
       return;
+    }
+    // The native Zen backport reads this opt-in before macOS window cycling.
+    // Keep it limited to our switcher actions; stock Zen ignores the attribute.
+    if (keyEl.parentElement === switcherKeyset) {
+      if (isMac && getBool(PREF_ENABLED, true) &&
+          effectiveMode(keyEl, rules) == ZEN) {
+        keyEl.setAttribute(NATIVE_PRIORITY_ATTR, "true");
+      } else {
+        keyEl.removeAttribute(NATIVE_PRIORITY_ATTR);
+      }
     }
     const wanted = wantedReserved(keyEl, rules);
     const current = keyEl.getAttribute("reserved");

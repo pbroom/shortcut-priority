@@ -475,3 +475,39 @@ test('switcher participates in per-shortcut priority and Use Both dispatches its
   h.api.setRules({ [forward.id]: 'zen' });
   assert.equal(forward.getAttribute('reserved'), 'true');
 });
+
+test('native priority follows the macOS switcher mode and stops when disabled', () => {
+  const attr = 'data-native-shortcut-priority';
+  const h = harness({ keys: [{ id: 'other', reserved: 'true' }] });
+  const forward = h.bind('forward');
+  const backward = h.bind('backward');
+  assert.equal(forward.getAttribute(attr), 'true');
+  assert.equal(backward.getAttribute(attr), 'true');
+  assert.equal(h.key('other').getAttribute(attr), null);
+  for (const mode of ['websites', 'both']) {
+    h.api.setRules({ [forward.id]: mode });
+    assert.equal(forward.getAttribute(attr), null);
+    assert.equal(backward.getAttribute(attr), 'true');
+  }
+  h.api.setRules({ [forward.id]: 'zen' });
+  assert.equal(forward.getAttribute(attr), 'true');
+  h.setPref(branch + 'enabled', false);
+  assert.equal(forward.getAttribute(attr), null);
+  assert.equal(backward.getAttribute(attr), null);
+  h.setPref(branch + 'enabled', true);
+  assert.equal(forward.getAttribute(attr), 'true');
+  assert.equal(backward.getAttribute(attr), 'true');
+});
+
+test('native priority stays absent on other platforms and honors the global mode', () => {
+  const attr = 'data-native-shortcut-priority';
+  const linux = harness({ platform: 'linux' });
+  assert.equal(linux.bind('forward').getAttribute(attr), null);
+  const h = harness({ prefs: { [branch + 'default']: 'websites' } });
+  const forward = h.bind('forward');
+  assert.equal(forward.getAttribute(attr), null);
+  h.api.setRules({ [forward.id]: 'zen' });
+  assert.equal(forward.getAttribute(attr), 'true');
+  h.api.setRules({});
+  assert.equal(forward.getAttribute(attr), null);
+});

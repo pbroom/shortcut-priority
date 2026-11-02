@@ -1,7 +1,7 @@
 {
   "name": "shortcut-priority",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "engines": { "node": ">=22" },
   "scripts": {
     "test": "node --check shortcut-priority.uc.js && node --test tests/*.test.mjs"
