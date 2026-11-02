@@ -1,0 +1,22 @@
+[
+  {
+    "property": "zen.shortcut-priority.enabled",
+    "label": "Use per-shortcut conflict settings",
+    "type": "checkbox",
+    "defaultValue": true
+  },
+  {
+    "property": "zen.shortcut-priority.default",
+    "label": "Shortcuts you haven't set",
+    "type": "dropdown",
+    "value": "string",
+    "defaultValue": "default",
+    "options": [
+      { "label": "Zen's default for each shortcut", "value": "default" },
+      { "label": "Prefer Websites", "value": "websites" },
+      { "label": "Use Both", "value": "both" },
+      { "label": "Prefer Zen", "value": "zen" }
+    ],
+    "placeholder": false
+  }
+]
