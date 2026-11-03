@@ -2,7 +2,7 @@
 // @name           Shortcut Priority
 // @description    Arc-style per-shortcut conflict setting: Prefer Websites, Use Both, or Prefer Zen.
 // @include        main
-// @version        0.3.0
+// @version        0.4.0
 // ==/UserScript==
 
 (() => {
@@ -180,6 +180,7 @@
       applyToKey(keyEl, rules, keysets);
     }
     refreshKeysets(keysets);
+    refreshNativeSwitcherBridge();
   }
 
   // Keysets can arrive late (DevTools adds one during delayed startup).
@@ -201,6 +202,7 @@
     }
     refreshKeysets(keysets);
     refreshBothKeys();
+    refreshNativeSwitcherBridge();
   });
 
   // ---------------------------------------------------------------------------
@@ -384,6 +386,36 @@
   let switcherMenus = [];
   let switcherPopup;
   let cyclingModifiers = null;
+  let nativeSwitcherModule = null;
+  let nativeSwitcherError = "";
+
+  function nativeSwitcherEligible() {
+    const key = document.getElementById("key_zsp_tabSwitcher_forward");
+    if (disposed || !isMac ||
+        Services.appinfo?.platformVersion?.split(".")[0] !== "159" ||
+        !getBool(PREF_ENABLED, true) || !switcherKeyset?.parentNode ||
+        key?.parentElement !== switcherKeyset ||
+        key.getAttribute("disabled") == "true" ||
+        key.getAttribute("key") !== "`" || key.getAttribute("keycode") ||
+        effectiveMode(key) !== ZEN) return false;
+    const mods = parseModifiers(key);
+    return mods.meta && !mods.ctrl && !mods.alt && !mods.shift;
+  }
+
+  function refreshNativeSwitcherBridge() {
+    const enabled = nativeSwitcherEligible();
+    if (!enabled && !nativeSwitcherModule) return;
+    try {
+      nativeSwitcherModule ||= ChromeUtils.importESModule(
+        "chrome://sine/content/shortcut-priority/macos-shortcuts.sys.mjs"
+      );
+      nativeSwitcherModule.setWindow(window, enabled);
+      nativeSwitcherError = "";
+    } catch (error) {
+      // Missing or unsupported native libraries leave the ordinary mod usable.
+      nativeSwitcherError = String(error);
+    }
+  }
   // Cocoa caches menu equivalents; refresh the reference after a remap.
   const switcherKeyObserver = new MutationObserver(() => {
     for (const item of switcherMenus) {
@@ -391,6 +423,7 @@
       item.removeAttribute("key");
       item.setAttribute("key", id);
     }
+    refreshNativeSwitcherBridge();
   });
 
   function advanceTab(forward) {
@@ -477,7 +510,8 @@
       switcherMenus.push(item);
     }
     switcherKeyObserver.observe(switcherKeyset, {
-      subtree: true, attributes: true, attributeFilter: ["key", "keycode", "modifiers"],
+      childList: true, subtree: true, attributes: true,
+      attributeFilter: ["key", "keycode", "modifiers", "disabled"],
     });
     window.addEventListener("keyup", onSwitcherKeyUp, {
       capture: true, mozSystemGroup: true,
@@ -487,6 +521,14 @@
   }
 
   function removeTabSwitcher(refreshNative = true) {
+    if (nativeSwitcherModule) {
+      try {
+        nativeSwitcherModule.setWindow(window, false);
+        nativeSwitcherError = "";
+      } catch (error) {
+        nativeSwitcherError = String(error);
+      }
+    }
     switcherKeyObserver.disconnect();
     if (cyclingModifiers && ctrlTab.isOpen) ctrlTab.close();
     cyclingModifiers = null;
@@ -885,6 +927,11 @@
     uninit,
     getRules,
     setRules,
+    nativeStatus: () => ({
+      eligible: nativeSwitcherEligible(),
+      error: nativeSwitcherError,
+      ...nativeSwitcherModule?.status(window),
+    }),
     modeFor: id => {
       const keyEl = document.getElementById(id);
       return keyEl ? effectiveMode(keyEl) : null;

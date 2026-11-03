@@ -32,11 +32,24 @@ For an Arc-style setup on macOS:
 2. Assign **Tab Switcher (forward)** to Command+backtick and **Tab Switcher (backward)** to Command+1.
 3. Hold Command while pressing either key to cycle through the native recent-tab previews. Release Command to select. Ctrl+Tab continues to work.
 
-macOS normally reserves Command+backtick for **Move focus to next window**. Overriding it inside Zen requires the companion native Zen/Gecko backport; stock Zen 1.24b consumes the key before this mod receives it. With that backport, choose **Prefer Zen** for the switcher action to request native priority. The mod leaves global macOS shortcuts unchanged. **Prefer Websites**, **Use Both**, and disabling the mod withdraw this request, so macOS can retain reserved combinations. Other key combinations work on stock Zen.
+macOS normally reserves Command+backtick for **Move focus to next window**. The optional compiled bridge below lets **Prefer Zen** override that combination on stock Zen 1.24b. The mod leaves global macOS shortcuts unchanged. **Prefer Websites**, **Use Both**, remapping the forward action, and disabling the mod withdraw the override. Other combinations work without the bridge. The companion Zen/Gecko source backport remains another route.
 
 The native override applies to saved bindings. macOS may still intercept Command+backtick while recording a new, empty binding; this backport does not change the recorder. Existing saved bindings are preserved.
 
 The switcher uses Zen's existing preview list and pending-tab rules. It skips the Show All Tabs button while cycling, and creates no separate tab history or preview UI. Disable the Sine mod to remove its actions and menu items; Zen retains your custom bindings for re-enabling it.
+
+### Optional macOS bridge
+
+This is a local installation for macOS and Gecko 159 (Zen 1.24b). Sine's normal installer does not install the compiled library. With Xcode Command Line Tools installed:
+
+1. Run `./native/build.sh` in this checkout. It builds and ad-hoc signs a universal arm64/x86_64 library.
+2. Quit Zen normally.
+3. Copy `macos-shortcuts.sys.mjs` and `native/build/libshortcut-priority.dylib` beside the installed `shortcut-priority.uc.js` in your profile's `chrome/sine-mods/shortcut-priority/` directory. Update that script from this checkout too.
+4. Start Zen and select **Prefer Zen** for the saved Command+backtick forward binding.
+
+The bridge uses the existing Sine loader. It does not replace, edit, or re-sign the Zen application. JavaScript only calls outbound C functions; native callbacks stay in compiled Objective-C. Removing the two optional files and restarting removes the bridge. Restart after replacing its library, because the loaded library stays pinned until process exit.
+
+The bridge refuses unsupported Gecko versions. After a browser upgrade, ordinary shortcut priority remains available, but the native override needs verification against that version.
 
 ## Options
 
@@ -54,6 +67,7 @@ Zen 1.24 moved its shortcuts to Firefox's `about:keyboard`, where each shortcut 
 
 - **Prefer Zen** sets `reserved="true"`. **Prefer Websites** sets `reserved="false"`. Gecko only reads key elements when their keyset is attached, so the script re-attaches changed keysets, the same way Firefox applies edited shortcuts.
 - On macOS, the switcher keys also carry `data-native-shortcut-priority="true"` while enabled and using **Prefer Zen**. The companion native patch checks that opt-in on a reserved chrome key before AppKit's default shortcut handling. Stock Zen ignores the attribute. Other shortcut actions are not opted in.
+- The optional stock-Zen bridge registers only browser windows whose forward switcher is enabled, bound to Command+backtick, and set to Prefer Zen. It invokes that action through Gecko's normal native menu target before AppKit handles window cycling. Other keys, windows, sheets, and modal dialogs keep their normal handling. Unloading unregisters the window and restores the native methods when no registered windows remain.
 - The actions use View because macOS manages the Window menu. After inserting/removing the rows, the mod refreshes Gecko's native menu cache without opening menus or firing popup handlers. Closing a window skips that refresh.
 - Initial backward traversal chooses the last visible native preview while preserving the popup delay. A quick modifier release can then select it before popup focus changes.
 - **Use Both** keeps the key unreserved so the page gets it, runs Zen's command itself as soon as the key is pressed, and cancels the copy of the event the page process sends back so the command doesn't run twice.
@@ -62,6 +76,8 @@ Zen 1.24 moved its shortcuts to Firefox's `about:keyboard`, where each shortcut 
 ## Verification
 
 Run `npm test` (Node 22 or later). The tests exercise priority rules, event forwarding, native switcher actions, modifier release, and unload cleanup with a browser harness. They do not prove macOS shortcut delivery; verify configured keys in a running Zen as well.
+
+On macOS, run `./native/test.sh` for the compiled hook fixtures. These test native filtering, menu dispatch, restoration, and other interposers; they do not replace real keyboard checks in Zen.
 
 ## License
 
