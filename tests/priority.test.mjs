@@ -81,7 +81,8 @@ class Element extends Events {
   }
 }
 
-function harness({ keys = [], prefs = {}, delayedStartupFinished = true, platform = 'macosx', tabCount = 4 } = {}) {
+function harness({ keys = [], prefs = {}, delayedStartupFinished = true, platform = 'macosx', tabCount = 4,
+  platformVersion = '', nativeBridge = null } = {}) {
   const values = new Map(Object.entries(prefs));
   const prefObservers = new Map();
   const topicObservers = new Map();
@@ -116,6 +117,7 @@ function harness({ keys = [], prefs = {}, delayedStartupFinished = true, platfor
   const nativeReloads = [];
   window.windowUtils = { forceUpdateNativeMenuAt: index => nativeReloads.push(index) };
   const services = {
+    appinfo: { platformVersion },
     prefs: {
       getBoolPref: (key, fallback) => values.get(key) ?? fallback,
       getIntPref: (key, fallback) => values.get(key) ?? fallback,
@@ -187,6 +189,11 @@ function harness({ keys = [], prefs = {}, delayedStartupFinished = true, platfor
     },
     performance: { now: () => 100 },
     console, AbortController, setTimeout, clearTimeout,
+    ChromeUtils: { importESModule(uri) {
+      assert.equal(uri, 'chrome://sine/content/shortcut-priority/macos-shortcuts.sys.mjs');
+      if (!nativeBridge) throw new Error('No native bridge installed');
+      return nativeBridge;
+    } },
   };
   vm.runInNewContext(source, context, { filename: 'shortcut-priority.uc.js' });
   const api = window.ZenShortcutPriority;
@@ -356,7 +363,7 @@ test('switcher commands, keys, and native menu references are complete when atta
   }
   const observer = h.mutations.find(item => item.target === h.key('key_zsp_tabSwitcher_forward').parentNode);
   assert.equal(observer.options.subtree, true);
-  assert.deepEqual(Array.from(observer.options.attributeFilter), ['key', 'keycode', 'modifiers']);
+  assert.deepEqual(Array.from(observer.options.attributeFilter), ['key', 'keycode', 'modifiers', 'disabled']);
   const menu = h.key('menu_zsp_tabSwitcher_forward');
   const changes = [];
   const originalSet = menu.setAttribute.bind(menu);
@@ -366,6 +373,78 @@ test('switcher commands, keys, and native menu references are complete when atta
   h.bind('forward', 'control,alt', 'j');
   observer.callback([{ target: h.key('key_zsp_tabSwitcher_forward'), attributeName: 'key' }]);
   assert.deepEqual(changes, [['remove', 'key'], ['set', 'key', 'key_zsp_tabSwitcher_forward']]);
+});
+
+test('compiled bridge registration follows the exact binding, priority, enable state, and unload', () => {
+  const calls = [];
+  let h;
+  let unloading = false;
+  const nativeBridge = {
+    setWindow(window, enabled) {
+      assert.equal(window, h.window);
+      if (unloading) assert.ok(h.key('key_zsp_tabSwitcher_forward'), 'unregister before removing the key');
+      calls.push(enabled);
+    },
+    status: () => ({ loaded: true, registered: calls.at(-1) === true }),
+  };
+  h = harness({ platformVersion: '159.0.1', nativeBridge });
+  const key = h.bind('forward');
+  const observer = h.mutations.find(item => item.target === key.parentNode);
+  observer.callback([]);
+  assert.equal(calls.at(-1), true);
+  assert.equal(h.api.nativeStatus().registered, true);
+  for (const mode of ['websites', 'both', 'zen']) {
+    h.api.setRules({ [key.id]: mode });
+    assert.equal(calls.at(-1), mode === 'zen');
+  }
+  h.setPref(branch + 'enabled', false);
+  assert.equal(calls.at(-1), false);
+  h.setPref(branch + 'enabled', true);
+  assert.equal(calls.at(-1), true);
+  for (const modifiers of ['accel,shift', 'accel,alt', 'accel,control', 'control']) {
+    key.setAttribute('modifiers', modifiers);
+    observer.callback([]);
+    assert.equal(calls.at(-1), false);
+  }
+  h.bind('forward', 'accel', 'x');
+  observer.callback([]);
+  assert.equal(calls.at(-1), false);
+  h.bind('forward');
+  key.setAttribute('disabled', 'true');
+  observer.callback([]);
+  assert.equal(calls.at(-1), false);
+  key.removeAttribute('disabled');
+  observer.callback([]);
+  assert.equal(calls.at(-1), true);
+  const parent = key.parentNode;
+  key.remove();
+  observer.callback([]);
+  assert.equal(calls.at(-1), false, 'detaching the owned key withdraws native priority');
+  parent.append(key);
+  observer.callback([]);
+  assert.equal(calls.at(-1), true);
+  unloading = true;
+  h.api.uninit(); // Sine calls without an unload event.
+  assert.equal(calls.at(-1), false);
+});
+
+test('compiled bridge stays unloaded on unsupported engines and missing libraries fail gracefully', () => {
+  let imports = 0;
+  const nativeBridge = { setWindow() { imports++; }, status: () => ({}) };
+  for (const options of [{ platformVersion: '160.0' }, { platform: 'linux', platformVersion: '159.0' }]) {
+    const h = harness({ ...options, nativeBridge });
+    h.bind('forward');
+    h.api.applyAll();
+    assert.equal(h.api.nativeStatus().eligible, false);
+  }
+  assert.equal(imports, 0);
+  const h = harness({ platformVersion: '159.0' });
+  h.bind('forward');
+  h.api.applyAll();
+  assert.match(h.api.nativeStatus().error, /No native bridge installed/);
+  h.api.cycleTabs(true);
+  assert.equal(h.ctrlTab.opens, 1, 'ordinary mod behavior survives missing native support');
+  h.api.uninit();
 });
 
 test('native switcher goes forward, reverses within the open panel, and commits only on modifier release', () => {
